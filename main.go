@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ func main() {
 	wait := flag.Int("wait", 0, "Wait in seconds (exit if no new events are detected after the first event)")
 	events := flag.String("events", "create,write,remove,rename", "Comma-separated list of events to monitor (create, write, remove, rename)")
 	exclude := flag.String("exclude", "", "Comma-separated list of file patterns to exclude")
+	recursive := flag.Bool("r", false, "Recursively monitor all subdirectories")
 	flag.Parse()
 
 	// 获取目录路径
@@ -36,6 +38,29 @@ func main() {
 	for _, event := range eventList {
 		eventMap[strings.TrimSpace(event)] = true
 	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		log.Fatalf("Failed to get absolute path for directory %s: %v", dir, err)
+	}
+
+	excludeMaps := make([]*regexp.Regexp, 0)
+
+	for _, path := range strings.Split(*exclude, ",") {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		path = filepath.Clean(path)
+		regexPattern := "^" + regexp.QuoteMeta(filepath.Join(absDir, path))
+		if strings.HasSuffix(path, string(filepath.Separator)) {
+			regexPattern += ".*"
+		}
+		regex, err := regexp.Compile(regexPattern)
+		if err != nil {
+			log.Fatalf("Failed to compile regex for exclude path %s: %v", path, err)
+		}
+		excludeMaps = append(excludeMaps, regex)
+	}
 
 	// 创建 Watcher
 	watcher, err := fsnotify.NewWatcher()
@@ -50,6 +75,27 @@ func main() {
 	err = watcher.Add(dir)
 	if err != nil {
 		log.Fatalf("Failed to add directory to watcher: %v", err)
+	}
+	if *recursive {
+		err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			path, err = filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				err = watcher.Add(path)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
 
 	doneChan := make(chan int)
@@ -80,17 +126,22 @@ func main() {
 			case event := <-eventChan:
 				detected := false
 
-				if event.Op&fsnotify.Create == fsnotify.Create && eventMap["create"] ||
-					event.Op&fsnotify.Write == fsnotify.Write && eventMap["write"] ||
-					event.Op&fsnotify.Remove == fsnotify.Remove && eventMap["remove"] ||
-					event.Op&fsnotify.Rename == fsnotify.Rename && eventMap["rename"] {
+				absPath, err := filepath.Abs(event.Name)
+				if err != nil {
+					log.Printf("Failed to get absolute path for event %s: %v", event.Name, err)
+					doneChan <- 255
+				}
+
+				if (event.Op&fsnotify.Create == fsnotify.Create && eventMap["create"]) ||
+					(event.Op&fsnotify.Write == fsnotify.Write && eventMap["write"]) ||
+					(event.Op&fsnotify.Remove == fsnotify.Remove && eventMap["remove"]) ||
+					(event.Op&fsnotify.Rename == fsnotify.Rename && eventMap["rename"]) {
 					detected = true
 				}
 
 				if detected && *exclude != "" {
-					excludeList := strings.Split(*exclude, ",")
-					for _, excludePattern := range excludeList {
-						if matched, _ := filepath.Match(excludePattern, filepath.Base(event.Name)); matched {
+					for _, regex := range excludeMaps {
+						if regex.MatchString(absPath) {
 							detected = false
 							break
 						}
