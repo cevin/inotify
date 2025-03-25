@@ -13,6 +13,9 @@ import (
 )
 
 func main() {
+
+	logger := log.New(os.Stdout, "", log.LstdFlags)
+
 	// 解析命令行参数
 	timeout := flag.Int("timeout", 0, "Timeout in seconds (exit if no events are detected within this time)")
 	wait := flag.Int("wait", 0, "Wait in seconds (exit if no new events are detected after the first event)")
@@ -23,13 +26,13 @@ func main() {
 
 	// 获取目录路径
 	if flag.NArg() == 0 {
-		log.Fatal("Directory path is required")
+		logger.Fatal("Directory path is required")
 	}
 	dir := flag.Arg(0)
 
 	// 参数校验
 	if *timeout < -1 || *wait < -1 {
-		log.Fatal("timeout and wait must be -1 (disabled) or non-negative")
+		logger.Fatal("timeout and wait must be -1 (disabled) or non-negative")
 	}
 
 	// 解析事件参数
@@ -40,7 +43,7 @@ func main() {
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		log.Fatalf("Failed to get absolute path for directory %s: %v", dir, err)
+		logger.Fatalf("Failed to get absolute path for directory %s: %v", dir, err)
 	}
 
 	excludeMaps := make([]*regexp.Regexp, 0)
@@ -57,7 +60,7 @@ func main() {
 		}
 		regex, err := regexp.Compile(regexPattern)
 		if err != nil {
-			log.Fatalf("Failed to compile regex for exclude path %s: %v", path, err)
+			logger.Fatalf("Failed to compile regex for exclude path %s: %v", path, err)
 		}
 		excludeMaps = append(excludeMaps, regex)
 	}
@@ -65,7 +68,7 @@ func main() {
 	// 创建 Watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("Failed to create watcher: %v", err)
+		logger.Fatalf("Failed to create watcher: %v", err)
 	}
 	defer func() {
 		_ = watcher.Close()
@@ -74,7 +77,7 @@ func main() {
 	// 添加监听目录
 	err = watcher.Add(dir)
 	if err != nil {
-		log.Fatalf("Failed to add directory to watcher: %v", err)
+		logger.Fatalf("Failed to add directory to watcher: %v", err)
 	}
 	if *recursive {
 		err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -94,7 +97,7 @@ func main() {
 			return nil
 		})
 		if err != nil {
-			log.Fatalln(err)
+			logger.Fatalln(err)
 		}
 	}
 
@@ -118,7 +121,7 @@ func main() {
 			select {
 			case event, ok := <-watcher.Events:
 				if !ok {
-					log.Println("Invalid watcher process")
+					logger.Println("Invalid watcher process")
 					doneChan <- 255
 					return
 				}
@@ -128,7 +131,7 @@ func main() {
 
 				absPath, err := filepath.Abs(event.Name)
 				if err != nil {
-					log.Printf("Failed to get absolute path for event %s: %v", event.Name, err)
+					logger.Printf("Failed to get absolute path for event %s: %v\n", event.Name, err)
 					doneChan <- 255
 				}
 
@@ -152,7 +155,7 @@ func main() {
 					continue
 				}
 
-				log.Printf("EVENT:%s %s\n", event.Op.String(), event.Name)
+				logger.Printf("EVENT:%s %s\n", event.Op.String(), event.Name)
 
 				if *timeout > 0 {
 					timeoutTimer.Reset(time.Duration(*timeout) * time.Second)
